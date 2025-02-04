@@ -17,7 +17,15 @@ class HullAgent(mesa.Agent):
         # Currently growth occurs when a random number is >7 (this will be changed to incorperate actual parameters like SST)
         rand_var = random.randint(0,10)
         if rand_var > 7:
-            self.fouling_level+=1        
+            self.fouling_level+=1      
+
+    def detach(self):
+        '''function capturing the case when the organisms detach due to hydrodynamic forces'''
+        rand_var = random.randint(0,100)
+        # calculations for the speed of the fluid flow in the area could be used to determine if the organism detatches
+        if rand_var > 85:
+            self.fouling_level-+1           
+
 
 
 class HullModel(mesa.Model):
@@ -29,7 +37,6 @@ class HullModel(mesa.Model):
         self.grid = mesa.space.MultiGrid(width, height, True)
 
         # Create agents
-        # agents = MoneyAgent.create_agents(model=self, n=n)
         # Create x and y coordinates for agents
         for x in range(width):
             for y in range(height):
