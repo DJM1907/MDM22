@@ -2,7 +2,11 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 import mesa
+import math
 import seaborn as sns
+from mesa.experimental.cell_space.property_layer import PropertyLayer
+
+
 
 class HullAgent(mesa.Agent):
     """An agent with fixed initial wealth."""
@@ -11,162 +15,104 @@ class HullAgent(mesa.Agent):
         super().__init__(model)
         self.fouling_level = 0
         self.temp = 20
+        self.depth = model.depths[self.pos]
 
     def grow(self):
         '''function deciding if the level of biofouling should increase'''
-        # Currently growth occurs when a random number is >7 (this will be changed to incorperate actual parameters like SST)
-        rand_var = random.randint(0,10)
-        if rand_var > 7:
+        # Currently growth occurs when a random number is >7 (this will be changed to incorperate actual parameters like SST and sunlight)
+        rand_var = random.randint(0,100)
+        x,y = self.pos
+        self.depth = model.depths[x][y]
+        if self.depth < 5:
+            threshold = 49
+        elif self.depth < 20:
+            threshold = 60
+        elif self.depth < 30:
+            threshold = 65    
+        else:
+            threshold = 85       
+
+        if rand_var > threshold:
             self.fouling_level+=1      
+        
 
     def detach(self):
         '''function capturing the case when the organisms detach due to hydrodynamic forces'''
         rand_var = random.randint(0,100)
         # calculations for the speed of the fluid flow in the area could be used to determine if the organism detatches
         if rand_var > 85:
-            self.fouling_level-+1           
+            self.fouling_level = 0         
 
 
 
 class HullModel(mesa.Model):
     """A model with some number of agents."""
 
-    def __init__(self, n, width, height, seed=None):
+    def __init__(self, width, length, max_depth, seed=None):
         super().__init__(seed=seed)
-        self.num_agents = n
-        self.grid = mesa.space.MultiGrid(width, height, True)
-
+        self.depths = np.zeros((width, length))
+        self.grid = mesa.space.MultiGrid(width, length, True)
+        self.width = width
+        self.length = length
+        self.max_depth = max_depth
+       
         # Create agents
         # Create x and y coordinates for agents
         for x in range(width):
-            for y in range(height):
+            for y in range(length):
                 agent = HullAgent(self)
                 self.grid.place_agent(agent, (x, y))
+                self.depths[x][y] = self.max_depth * ((self.cross_profile(x)+self.length_profile(y))/2)
+                #Sself.depths[x][y] = self.max_depth * (self.cross_profile(x))
+    
+    def cross_profile(self, x):
+        '''returns a percentage (out of 1) of the maximum depth of the hull'''
+        ys = np.linspace(-1.25, 1.25, self.width)
+        local_max_height = (0.4*(abs(math.tan(1.25))))
+        self.scaled_height = 0.4*abs(math.tan(ys[x]))/local_max_height
+        self.scaled_depth = 1-self.scaled_height  # opposite of height
+        return self.scaled_depth
+    
+    def length_profile(self, y):
+        '''returns a percentage of the maximum depth of the hull''' 
+        xs = np.linspace(0,1.0875, self.length)
+        if xs[y] < 0.0375:
+            self.local_depth = 4*(xs[y]-0.0375) + 0.15
+        elif xs[y] > 1.0375:
+            self.local_depth = -3*(xs[y]-1.0375) + 0.15
+        else:
+            self.local_depth = 0.15
+
+
+        return self.local_depth/0.15
 
     def step(self):
         self.agents.shuffle_do("grow")    
+        self.agents.shuffle_do("detach")
 
-model = HullModel(100, 50, 30)
+model = HullModel(70, 50, 40)
 # Run the model and update the heatmap dynamically
 for step in range(10):
     model.step()
 
     # Initialize agent count grid
-    agent_counts = np.zeros((model.grid.height, model.grid.width))
-    agent_levels = np.zeros((model.grid.height, model.grid.width))
+    #agent_counts = np.zeros((model.length, model.width))
+    agent_levels = np.zeros((model.length, model.width))
     # Populate the grid with agent counts
     for cell_content, (x, y) in model.grid.coord_iter():
         #agent_counts[y][x] = len(cell_content)  # Ensure proper indexing
         agent_levels[y][x] = cell_content[0].fouling_level
     # Clear previous plot
-    plt.clf()
-    
+    plt.clf()    
     # Draw updated heatmap
-    sns.heatmap(agent_levels, cmap="Greens", annot=False, cbar=True, square=True, cbar_kws={"orientation": "horizontal"})
+    sns.heatmap(agent_levels, cmap="Greens", annot=False, cbar=True, cbar_kws={"orientation": "horizontal"}, vmin=0,vmax=10)
     plt.title(f"Step {step + 1}")
 
     # Pause to update plot
     plt.pause(0.5)  # Adjust for desired speed
 
+
+#sns.heatmap(model.depths, cmap="Greens", annot=False, cbar=True, square=False, cbar_kws={"orientation": "horizontal"})
+
 # Ensure the final frame remains visible
-#plt.show()
-
-
-
-'''        
-ALIVE = 1
-n = 15
-#create grid
-def create_grid(n):
-    grid = np.zeros((n,n), dtype=np.int8)
-    return grid
-    
-   
-#update grid
-def update_grid(grid, n):
-
-    for i in range(n):
-        for j in range(n):
-            neighbours_list = []
-
-            neighbours_list.append(grid[i][(j+1)%n])
-            neighbours_list.append(grid[i][(j-1)%n])
-            neighbours_list.append(grid[(i+1)%n][(j)%n])
-            neighbours_list.append(grid[(i-1)%n][(j)%n])
-            neighbours_list.append(grid[(i+1)%n][(j+1)%n])
-            neighbours_list.append(grid[(i+1)%n][(j-1)%n])
-            neighbours_list.append(grid[(i-1)%n][(j-1)%n])
-            neighbours_list.append(grid[(i-1)%n][(j-1)%n])
-            
-            grid[i][j] = update_value(neighbours_list,grid[i][j])
-    
-
-def update_value(neighbours, current_element):
-    #new value
-    new_value = current_element
-    #count 1s and 0s
-    ones = neighbours.count(1)
-    zeros = neighbours.count(0)
-
-    if current_element == 1:   
-        if ones <= 1: # loneliness
-            new_value = 0
-        elif ones >= 4: # starvation
-            new_value = 0
-        elif ones == 2 or ones == 3 : # survival rule
-            new_value = 1        
-    elif current_element == 0:
-        if ones == 3: # birth rule
-            new_value = 1
-      
-    return new_value        
-            
-        
-def run_tests():
-    
-    assert update_value([1,1,1,1,1,1,1,1,1],0)==0, "test 1"
-    assert update_value([1,1,1,1,1,1,1,1,0],0)==0, "test 2"
-    assert update_value([1,1,1,1,1,1,1,0,0],0)==0, "test 3"
-    assert update_value([1,1,1,1,1,1,0,0,0],0)==0, "test 4"
-    assert update_value([1,1,1,1,1,0,0,0,0],0)==0, "test 5"
-    assert update_value([1,1,1,1,0,0,0,0,0],0)==0, "test 6"
-    assert update_value([1,1,1,0,0,0,0,0,0],0)==1, "test 7"
-    assert update_value([1,1,0,0,0,0,0,0,0],0)==0, "test 8"
-    assert update_value([1,0,0,0,0,0,0,0,0],0)==0, "test 9"
-    assert update_value([0,0,0,0,0,0,0,0,0],0)==0, "test 10"
-        
-    assert update_value([1,1,1,1,1,1,1,1,1],1)==0, "test 11"
-    assert update_value([1,1,1,1,1,1,1,1,0],1)==0, "test 12"
-    assert update_value([1,1,1,1,1,1,1,0,0],1)==0, "test 13"
-    assert update_value([1,1,1,1,1,1,0,0,0],1)==0, "test 14"
-    assert update_value([1,1,1,1,1,0,0,0,0],1)==0, "test 15"
-    assert update_value([1,1,1,1,0,0,0,0,0],1)==0, "test 16"
-    assert update_value([1,1,1,0,0,0,0,0,0],1)==1, "test 17"
-    assert update_value([1,1,0,0,0,0,0,0,0],1)==1, "test 18"
-    assert update_value([1,0,0,0,0,0,0,0,0],1)==0, "test 19"
-    assert update_value([0,0,0,0,0,0,0,0,0],1)==0, "test 20"
-
-
-
-
-
-grid = create_grid(n)
-print(grid) 
-
-update_grid(grid, n)
-print("new grid")
-print(grid) 
-
-
-fig = plt.figure(figsize=(10, 10))
-ax1 = fig.add_subplot(211)
-ax1.set_axis_off()
-image1 = np.zeros((n, n), dtype = np.int8)
-
-#Copy CA_grid into the image array
-image1[:, :] = grid
-
-#Display the image
-ax1.imshow(image1, interpolation='none', cmap='RdPu')
-plt.pause(10)
-'''
+plt.show()
