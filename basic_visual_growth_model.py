@@ -40,7 +40,7 @@ class HullAgent(mesa.Agent):
         '''function capturing the case when the organisms detach due to hydrodynamic forces'''
         rand_var = random.randint(0,100)
         # calculations for the speed of the fluid flow in the area could be used to determine if the organism detatches
-        if rand_var > 85:
+        if rand_var > 90:
             self.fouling_level = 0         
 
 
@@ -92,7 +92,7 @@ class HullModel(mesa.Model):
 
 model = HullModel(70, 50, 40)
 # Run the model and update the heatmap dynamically
-for step in range(10):
+for step in range(20):
     model.step()
 
     # Initialize agent count grid
@@ -109,10 +109,10 @@ for step in range(10):
     plt.title(f"Step {step + 1}")
 
     # Pause to update plot
-    plt.pause(0.5)  # Adjust for desired speed
+    plt.pause(0.2)  # Adjust for desired speed
 
-
-#sns.heatmap(model.depths, cmap="Greens", annot=False, cbar=True, square=False, cbar_kws={"orientation": "horizontal"})
+plt.figure()
+sns.heatmap(model.depths, cmap="Greens", annot=False, cbar=True, square=False, cbar_kws={"orientation": "horizontal"})
 
 # Ensure the final frame remains visible
 plt.show()
