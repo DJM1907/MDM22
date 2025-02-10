@@ -5,6 +5,7 @@ import mesa
 import math
 import seaborn as sns
 from mesa.experimental.cell_space.property_layer import PropertyLayer
+import plotly.graph_objects as go
 
 
 
@@ -62,8 +63,12 @@ class HullModel(mesa.Model):
             for y in range(length):
                 agent = HullAgent(self)
                 self.grid.place_agent(agent, (x, y))
-                self.depths[x][y] = self.max_depth * ((self.cross_profile(x)+self.length_profile(y))/2)
-                #Sself.depths[x][y] = self.max_depth * (self.cross_profile(x))
+                if x==0 or x == (self.width-1) or y == 0 or y == (self.length-1):
+                    self.depths[x][y] = 0
+                else:
+
+                    self.depths[x][y] = self.max_depth * ((self.cross_profile(x)+self.length_profile(y))/2)
+                #self.depths[x][y] = self.max_depth * (self.length_profile(y))
     
     def cross_profile(self, x):
         '''returns a percentage (out of 1) of the maximum depth of the hull'''
@@ -75,24 +80,25 @@ class HullModel(mesa.Model):
     
     def length_profile(self, y):
         '''returns a percentage of the maximum depth of the hull''' 
-        xs = np.linspace(0,1.0875, self.length)
-        if xs[y] < 0.0375:
+        xs = np.linspace(-(0.2**(1/8)), (0.2**(1/8)), self.length)
+        self.local_depth = (xs[y])**8
+        '''if xs[y] < 0.0375:
             self.local_depth = 4*(xs[y]-0.0375) + 0.15
         elif xs[y] > 1.0375:
             self.local_depth = -3*(xs[y]-1.0375) + 0.15
         else:
-            self.local_depth = 0.15
+            self.local_depth = 0.15'''
 
 
-        return self.local_depth/0.15
+        return 1-(self.local_depth/0.2)
 
     def step(self):
         self.agents.shuffle_do("grow")    
         self.agents.shuffle_do("detach")
 
-model = HullModel(70, 50, 40)
+model = HullModel(32, 230, 19)
 # Run the model and update the heatmap dynamically
-for step in range(20):
+for step in range(1):
     model.step()
 
     # Initialize agent count grid
@@ -105,14 +111,31 @@ for step in range(20):
     # Clear previous plot
     plt.clf()    
     # Draw updated heatmap
-    sns.heatmap(agent_levels, cmap="Greens", annot=False, cbar=True, cbar_kws={"orientation": "horizontal"}, vmin=0,vmax=10)
+    sns.heatmap(agent_levels, cmap="Greens", annot=False, cbar=True,square=True, cbar_kws={"orientation": "horizontal"}, vmin=0,vmax=10)
     plt.title(f"Step {step + 1}")
 
     # Pause to update plot
     plt.pause(0.2)  # Adjust for desired speed
 
-plt.figure()
-sns.heatmap(model.depths, cmap="Greens", annot=False, cbar=True, square=False, cbar_kws={"orientation": "horizontal"})
+#plt.figure()
+#sns.heatmap(model.depths, cmap="Greens", annot=False, cbar=True, square=False, cbar_kws={"orientation": "horizontal"})
 
-# Ensure the final frame remains visible
-plt.show()
+
+# Create mesh grid
+depths = model.depths
+width = model.width
+length = model.length
+X, Y = np.meshgrid(np.arange(width), np.arange(length), indexing='ij')
+Z = depths  # Negative for proper visualization
+
+# Plot with Plotly
+fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='Blues')])
+fig.update_layout(title='3D Hull Depth Profile', scene=dict(
+    xaxis_title='X (Width)',
+    yaxis_title='Y (Length)',
+    zaxis_title='Depth',
+    zaxis=dict(autorange='reversed'),  # Ensures depth is plotted downward
+    aspectmode='auto',  # Ensures all axes have the same scale
+))
+
+fig.show()
