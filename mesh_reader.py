@@ -1,6 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits import mplot3d
 import pyvista as pv
 
 def read_kcs_grid(file):
@@ -33,3 +31,6 @@ mesh = np.array([X,Y,Z]).transpose()
 pl = pv.Plotter()
 pl.add_mesh(mesh, color='black')
 pl.show()
+
+# Improve model by first mirroring so it's a full hull
+# then work out how to make it into a full mesh instead of a point cloud
