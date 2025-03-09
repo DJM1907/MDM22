@@ -4,9 +4,14 @@ import random
 import matplotlib.pyplot as plt
 import mesa
 import math
+import pandas as pd
 import seaborn as sns
 from mesa.experimental.cell_space.property_layer import PropertyLayer
 import plotly.graph_objects as go
+from sklearn.linear_model import LogisticRegression
+from mpl_toolkits.mplot3d import Axes3D
+from mesa.datacollection import DataCollector
+
 def read_kcs_grid(file):
     
     with open(file,'r') as file:
@@ -60,95 +65,128 @@ def KCS_hull():
     return X,Y,Z
 
 
-def doublet_velocity(strength, x_doublet, y_doublet, x, y):
-    """Calculate velocity due to a doublet at a specific point (x_doublet, y_doublet)"""
-    r_squared = (x - x_doublet)**2 + (y - y_doublet)**2
-    u = -strength / (2 * np.pi) * ((x - x_doublet)**2 - (y - y_doublet)**2) / r_squared**2
-    v = -strength / (2 * np.pi) * (2 * (x - x_doublet) * (y - y_doublet)) / r_squared**2
-    return u, v
-
 class HullAgent(mesa.Agent):
     """An agent with fixed initial wealth."""
 
     def __init__(self, model):
         super().__init__(model)
         self.fouling_level = 0
-        self.temp = 20
+        self.temp = self.model.temp
         self.depth = model.depths[self.pos]
-        # initialise the velocity of the fluid flow 
-        self.velocity = model.ship_speed
+        self.max_fouling = 8
+
 
 
     def grow(self):
         '''function deciding if the level of biofouling should increase'''
         # sigmoid distribution used to determine the probability of biofouling growth
-        rand_var = np.random.uniform(0,1)
+        rand_var = np.random.uniform(0,1) 
         x,y = self.pos
         self.depth = self.model.depths[x][y]
+        
+        # create distributions for the optimal temperatures of each stage of biofouling
+        optimal_temps = [30, 20, 15] 
+        x,y = self.pos
+        self.sunlight = self.model.sunlight_map[x][y]
 
-        '''# old probability distribution:
-        if self.depth < 5:
-            threshold = 49
-        elif self.depth < 20:
-            threshold = 60
-        elif self.depth < 30:
-            threshold = 65    
-        else:
-            threshold = 85       
-        '''
-        # sigmoid distribution for biofouling growth probability
+
+        # sigmoid distribution for biofouling growth probability from depths
         growth_prob = self.model.sigmoid(self.depth)
-
+        self.growth = 0 
+        self.growth_prob = 0
         if rand_var > growth_prob:
-            self.fouling_level+=1      
+            if self.fouling_level == 0:  # no fouling currently 
+                self.growth += np.random.uniform(0.8,1.0)
+                     
+            elif self.fouling_level < self.max_fouling:  # keeps level below max fouling
+                # condition statements control how much growing occurs due to light intensity
+                if self.sunlight > 0.8: # high light intensity
+                    self.growth += np.random.uniform(0.8,1.0)
+                elif self.sunlight > 0.6:  # medium-high light intensity
+                    self.growth += np.random.uniform(0.65,0.8)
+                elif self.sunlight > 0.4:  # medium light intensity
+                    self.growth += np.random.uniform(0.35,0.55)
+                elif self.sunlight > 0.2:  # low light intensity
+                    self.growth += np.random.uniform(0.15,0.35)
 
-    
+                '''
+                # condition statements control the growing due to proximity to optimal temperature
+                if self.fouling_level > 5:  # large organisms
+                    if optimal_temps[2] - 1 < self.temp < optimal_temps[2] + 1: # if temperature is in optimal range then do more fouling
+                        self.growth += np.random.uniform(0.35,0.55)
+                    elif optimal_temps[2] - 5 < self.temp < optimal_temps[2] + 5: # if temperature is in optimal range then do more fouling 
+                        self.growth += np.random.uniform(0.15,0.30)
+                    else:
+                        self.growth += np.random.uniform(0.05,0.15) 
 
-    def detach(self):
-        '''function capturing the case when the organisms detach due to hydrodynamic forces'''
-        rand_var = random.randint(0,100)
-        # calculations for the speed of the fluid flow in the area could be used to determine if the organism detatches
-        if rand_var > 95 and self.fouling_level>2:  # only mid level biofouling and above can detach
-            self.fouling_level = 0         
+                elif 2 < self.fouling_level <= 5:  # mid level organisms
+                    if optimal_temps[1] - 1 < self.temp < optimal_temps[1] + 1: # if temperature is in optimal range then do more fouling
+                        self.growth += np.random.uniform(0.65,0.80)
+                    elif optimal_temps[1] - 5 < self.temp < optimal_temps[1] + 5: # if temperature is in optimal range then do more fouling 
+                        self.growth += np.random.uniform(0.35,0.55)
+                    else:
+                        self.growth += np.random.uniform(0.15,0.35)
+                else:  # slime  
+                    if optimal_temps[0] - 1 < self.temp < optimal_temps[0] + 1: # if temperature is in optimal range then do more fouling
+                        self.growth += np.random.uniform(0.80,1.00)
+                    elif optimal_temps[0] - 5 < self.temp < optimal_temps[0] + 5: # if temperature is in optimal range then do more fouling 
+                        self.growth += np.random.uniform(0.35,0.55)
+                    else:
+                        self.growth +=np.random.uniform(0.15,0.35)
+                '''
+                
+                if self.fouling_level > 5:  # large organisms
+                    index = 2
+                elif 2 < self.fouling_level <= 5:  # mid level organisms
+                    index = 1
+                else:  # slime  
+                    index = 0
+                # determine difference from optimal temperature
+                temp_diff = abs(self.temp - optimal_temps[index])
+                # linear decay for growth 
+                temp_growth = 1-(temp_diff)/10
+                # ensure growing occurs
+                if temp_growth < 0.25 :
+                    self.growth += 0.25
+                else:
+                    self.growth += temp_growth    
+                  
 
-
+            self.fouling_level += self.growth/2             
+                      
 
 class HullModel(mesa.Model):
     """A model with some number of agents."""
 
-    def __init__(self, width, length, max_depth,ship_speed=2.0, seed=None):
+    def __init__(self, width, length, max_depth,temp=20,sunlight_angle=50, seed=None):
         super().__init__(seed=seed)
         self.depths = np.zeros((width, length))
-    
+        self.areas = np.zeros((width - 1, length - 1))
+        self.point_areas = np.zeros((width, length))
+
         self.width = width
         self.length = length
         self.max_depth = max_depth
-        self.ship_speed = ship_speed
-        self.grid = mesa.space.MultiGrid(self.width, self.length, False)
-        # create water grid
-        #self.grid = mesa.space.ContinuousSpace(self.width, self.length, False)
-
-        self.setup()
-        #self.KCS_setup()
+        self.temp = temp
+        self.large_growth_area, self.mid_growth_area, self.slime_area = 0,0,0
         
+        # create  grid
+        self.grid = mesa.space.MultiGrid(self.width, self.length, False) 
+        # setup agents and calculate depths   
+        self.setup()    
+        # get sunlight mapping
+        self.sunlight_map = self.get_sunlight_map()
+        # get total surface area
+        self.total_area, _, self.point_areas = self.getsurface_areas()
 
-    def KCS_setup(self):
-        '''---------NEEDS CHANGING---------'''
-        self.depths = Z
-        self.max_depth = max(Z)  
-        self.width = max(Y)   
-        self.length = max(X)   
-
-        plt.scatter(Y,Z, s=1)
-        plt.xlabel('y')
-        plt.show()
-        # Create agents
-        for x in range(self.width):
-            print('x')
-            for y in range(self.length):
-                 agent = HullAgent(self)
-                 self.grid.place_agent(agent, (y, x))
-
+        # Create data collector for fouling rating 
+        self.datacollector = DataCollector(
+            model_reporters={"Fouling Rating": self.getFR,
+                             "Large Organism Area": self.get_large,
+                             "Small Organism Area" : self.get_mid,
+                             "Slime Area": self.get_slime
+                             },
+        )
 
     def setup(self):
         # Create agents
@@ -160,8 +198,9 @@ class HullModel(mesa.Model):
                 if x==0 or x == (self.width-1) or y == 0 or y == (self.length-1):
                     self.depths[x][y] = 0
                 else:
-
                     self.depths[x][y] = self.max_depth * ((self.cross_profile(x)+self.length_profile(y))/2)
+
+
     
     def cross_profile(self, x):
         '''returns a percentage (out of 1) of the maximum depth of the hull'''
@@ -172,35 +211,170 @@ class HullModel(mesa.Model):
         return self.scaled_depth
     
     def length_profile(self, y):
+
         '''returns a percentage of the maximum depth of the hull''' 
         xs = np.linspace(-(0.2**(1/8)), (0.2**(1/8)), self.length)
         self.local_depth = (xs[y])**8
-        '''if xs[y] < 0.0375:
-            self.local_depth = 4*(xs[y]-0.0375) + 0.15
-        elif xs[y] > 1.0375:
-            self.local_depth = -3*(xs[y]-1.0375) + 0.15
-        else:
-            self.local_depth = 0.15'''
-
-
         return 1-(self.local_depth/0.2)
+    
+    def getsurface_areas(self):
+        total_area = 0
+        point_areas = np.zeros((self.width, self.length))
+        point_counts = np.zeros((self.width, self.length))
+        for x in range(1, self.width - 1):
+            for y in range(1, self.length - 1):
+                p1 = np.array([x, y, self.depths[x, y]])
+                p2 = np.array([x + 1, y, self.depths[x + 1, y]])
+                p3 = np.array([x, y + 1,self.depths[x, y + 1]])
+                p4 = np.array([x + 1, y + 1, self.depths[x + 1, y + 1]])
+                
+                # Two triangular facets per square cell
+                area1 = np.linalg.norm(np.cross(p2 - p1, p3 - p1)) / 2
+                area2 = np.linalg.norm(np.cross(p4 - p2, p3 - p2)) / 2
+                
+                cell_area = area1 + area2
+                self.areas[x - 1, y - 1] = cell_area
+                total_area += cell_area
 
-    def getFR(self):
+                # Assign area to each point
+                for px, py in [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]:
+                    point_areas[px, py] += cell_area / 4  # Each point gets 1/4 of surrounding triangles
+                    point_counts[px, py] += 1
+        
+        # Normalize the area per point
+        self.point_areas = np.divide(point_areas, point_counts, out=np.zeros_like(point_areas), where=point_counts > 0)
+        
+        return total_area, self.areas, self.point_areas
+
+
+
+    def get_sunlight_map(self):
+
+        #x_col = np.random.choice(np.linspace(self.width/4, 3*self.width/4))
+        x_columns = np.arange(0, self.width,1)  # select multiple x-coordinate columns
+        sunlight_angle = 50  # sunlight angle in degrees
+
+        # surface angles
+        surface_angles = self.calculate_surface_angles(self.depths, x_columns)
+        # if sunlight will hit for each column
+        light_hits = self.check_sunlight_hit(surface_angles, sunlight_angle)
+        # convert to array and fill in last row
+        light_hits_arr = np.array(list(light_hits.values()))
+        light_hits_arr = np.hstack((light_hits_arr, light_hits_arr[:, [0]]))  # Add last row
+
+        return light_hits_arr
+
+    def light_intensities(self, surface_angles):
+        angles = np.array(list(surface_angles.values()))
+        intensities = np.ones((self.width,self.length))
+        for i in range(self.width):
+            for j in range(self.length-1):
+                distance_underwater = self.depths[i][j]/np.sin(np.radians(angles[i][j])) 
+                intensities[i][j] = self.get_intensity()
+
+
+
+
+
+    def calculate_surface_angles(self,depths, x_columns):
+        """
+        calc surface angles along selected x-columns of hull.
+        rets:
+        dict with x-cols as keys and lists of angles as values.
+        """
+        length = depths.shape[1] 
+        angles_dict = {}
+
+        for x_column in x_columns:
+            angles = []
+            for y in range(length-1):
+                # extract (x, y, z) positions
+                z1 = depths[x_column][y]
+                z2 = depths[x_column, y + 1]
+
+                # calc surface vector (change in y and z)
+                vector = np.array([0, 1, z2 - z1])  # movement in y
+
+                # normal vector (points straight up)
+                normal = np.array([0, 0, 1])
+
+                # calc dot product and magnitudes
+                dot_product = np.dot(vector, normal)
+                magnitude_vector = np.linalg.norm(vector)
+                magnitude_normal = np.linalg.norm(normal)
+
+                # calc angle in rad.s
+                angle_rad = np.arccos(dot_product / (magnitude_vector * magnitude_normal))
+
+                # convert to deg.s
+                angle_deg = np.degrees(angle_rad)
+                angles.append(angle_deg)
+
+            angles_dict[x_column] = angles  # store angles for this column
+
+        return angles_dict
+
+    def check_sunlight_hit(self,surface_angles, sunlight_angle):
+        """
+        whether sunlight will hit each hull surface based on angles.
+        rets:
+        dictionary of if light will hit (True) or miss (False).
+        """
+        hit_results = {}
+        for x_column, angles in surface_angles.items():
+            hit_results[x_column] = [sunlight_angle > angle for angle in angles]
+
+        return hit_results
+
+    def get_slime(self):
+        return self.slime_area
+    
+    def get_large(self):
+        return self.large_growth_area
+    
+    def get_mid(self):
+        return self.mid_growth_area
+                
+    def getFR(self, return_types=False):
+        '''returns the fouling rate of the hull'''
+        total_area = self.total_area
+        # Create lists to store fouling levels
+        fouling_levels = np.zeros_like(self.point_areas)
+        # Iterate through all agents on the grid
+        for cell_content, pos in self.grid.coord_iter():
+            x, y = pos
+            if cell_content:  # Ensure there's an agent in the cell
+                fouling_levels[x][y] = cell_content[0].fouling_level
+        fouling_levels = np.array(fouling_levels)
+        self.large_growth_area = np.sum(fouling_levels*self.point_areas > 5)/total_area
+        self.mid_growth_area = np.sum((fouling_levels*self.point_areas > 2) & (fouling_levels*self.point_areas <= 5))/total_area
+        self.slime_area = np.sum((fouling_levels*self.point_areas > 0) & (fouling_levels*self.point_areas <= 2))/total_area
+
+        if return_types==True:
+            return self.large_growth_area, self.mid_growth_area, self.slime_area
+        else:
+            return 15*self.large_growth_area + 0.5*self.mid_growth_area + 0.2*self.slime_area
+
+            
+    def getFR_old(self, return_types=False):
         '''returns the fouling rate of the hull'''
         # Create lists to store fouling levels
         fouling_levels = []
-
+        total_area = self.length*self.width
         # Iterate through all agents on the grid
         for cell_content, pos in self.grid.coord_iter():
             if cell_content:  # Ensure there's an agent in the cell
                 fouling_levels.append(cell_content[0].fouling_level) 
         fouling_levels = np.array(fouling_levels)
-        large_growth_area = np.sum(fouling_levels > 4)
-        mid_growth_area = np.sum((fouling_levels > 2) & (fouling_levels < 5))
-        slime_area = np.sum((fouling_levels > 0) & (fouling_levels < 3))
+        self.large_growth_area = np.sum(fouling_levels > 5)/total_area
+        self.mid_growth_area = np.sum((fouling_levels > 2) & (fouling_levels <= 5))/total_area
+        self.slime_area = np.sum((fouling_levels > 0) & (fouling_levels <= 2))/total_area
 
+        if return_types==True:
+            return self.large_growth_area, self.mid_growth_area, self.slime_area
+        else:
+            return 15*self.large_growth_area + 0.5*self.mid_growth_area + 0.2*self.slime_area
 
-        return 15*large_growth_area + 0.5*mid_growth_area + 0.2*slime_area
 
     def sigmoid(self, x):
         'sigmoid distribution for biofouling growth probability'
@@ -210,11 +384,27 @@ class HullModel(mesa.Model):
     
 
     def step(self):
+
         self.agents.shuffle_do("grow")    
-        self.agents.shuffle_do("detach")
+        self.large_growth_area, self.mid_growth_area, self.slime_area = self.getFR(True)
+        #self.agents.shuffle_do("detach")
+
+        self.datacollector.collect(self)
 
 
+def plot_fouling_classes(large, mid, slime):
+    plt.figure()
+    time_steps = np.linspace(0,n_steps,n_steps)
+    
+    plt.plot(time_steps, 100*large,'r-', label='Large Organisms (Eg. Barnacles)')
+    plt.plot(time_steps, 100*mid,'g-', label='Small Organisms (Eg. Weed)')
+    plt.plot(time_steps, 100*slime,'b-', label='Slime Layer')
 
+    plt.xlabel('Time Steps')
+    plt.ylabel('Fouling Coverage (percentage cover over the hull)')
+    plt.title('Fouling Coverage Over time')
+    plt.legend()
+    plt.show()   
 
 def plotly_plot():
     '''Visualise the hull in 3D using Plotly'''
@@ -223,7 +413,7 @@ def plotly_plot():
     width = model.width
     length = model.length
     X, Y = np.meshgrid(np.arange(width), np.arange(length), indexing='ij')
-    Z = depths  # Negative for proper visualization
+    Z = depths 
     fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='Blues')])
     fig.update_layout(title='3D Hull Depth Profile', scene=dict(
         xaxis_title='X (Width)',
@@ -232,9 +422,8 @@ def plotly_plot():
         zaxis=dict(autorange='reversed'),  # Ensures depth is plotted downward
         aspectmode='auto',  # Ensures all axes have the same scale
     ))
-    return X,Y,Z
     fig.show()
-
+    #return X,Y,Z
 
 
 def plot_prob_dist():
@@ -245,87 +434,86 @@ def plot_prob_dist():
     plt.plot(xs, ys)    
     plt.show()
 
-def plot_FR():
-    '''plot the fouling rating of the hull over time'''
-    plt.figure()
-    time_steps = np.linspace(0,n_steps,n_steps)
-    plt.plot(time_steps, FRs)
-    plt.xlabel('Time Steps')
-    plt.ylabel('Fouling Rating')
-    plt.title('Fouling Rating over Time')
-    plt.show()    
 
-def KCS_surface():
-    points = np.zeros((24604, 3))  # Adjust shape (Width, Length, Depth)
-    #points[:, 2] = -np.abs(points[:, 2])  # Keep hull below waterline
-    points[:,0] = X
-    points[:,1] = Y
-    points[:,2] = Z
+# instantiate model
+model = HullModel(width=12, length=120, max_depth=9)
+total, arr, point_arr = model.getsurface_areas()
+print('Area:',total)
+print('Area arr:',arr.shape)
+print('point_arr', point_arr)
 
-    tri = Delaunay(points[:, :2])  # Triangulate hull base
+# set parameters for batch_run
+params = {"length": 120,
+          "width": 12,
+          "max_depth": 9,
+          "temp": [15,20,25,30,35],
+          "sunlight_angle": [25,30,35,40,45,50],
+           "seed": 42}
 
-    # Plot
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
-    ax.plot_trisurf(points[:, 0], points[:, 1], points[:, 2], triangles=tri.simplices, cmap="copper")
+n_steps = 80
+n_iter = 3
 
-    ax.set_title("3D Triangulated Hull")
-    plt.show()
-
-
-X, Y, Z = KCS_hull()
-
-
-model = HullModel(60, 120, 15)
+# run model
+results = mesa.batch_run(
+    HullModel,
+    iterations=n_iter,
+    parameters=params,
+    max_steps=n_steps,
+    data_collection_period=1,
+)
+# convert results to dataframe
+results_df = pd.DataFrame(results)
+# plot overall fouling
+plt.figure()
+g5 = sns.lineplot(data=results_df, x="Step", y="Fouling Rating", hue='sunlight_angle')  
+plt.figure()
+g1 = sns.lineplot(data=results_df, x="Step", y="Fouling Rating", hue='temp')
+plt.xlabel('Time')
+plt.ylabel('FR')
+plt.title('Fouling rating over time')
+plt.legend()
+plt.tight_layout()
+# plot other fouling types
+plt.figure()
+g2 = sns.lineplot(data=results_df, x="Step", y="Large Organism Area")
+g3 = sns.lineplot(data=results_df, x="Step", y="Small Organism Area")
+g4 = sns.lineplot(data=results_df, x="Step", y="Slime Area")
+plt.show()
+'''
 # Run the model and update the heatmap dynamically
-n_steps = 20
+n_steps = 2
 FRs = np.zeros(n_steps)  # fouling ratings 
+large_fouling = np.zeros(n_steps)
+medium_fouling = np.zeros(n_steps)
+slime_fouling = np.zeros(n_steps)
+
 for step in range(n_steps):
     model.step()
-    FRs[step] = model.getFR()
+    #FRs[step] = model.getFR(False)
+    #large_fouling[step], medium_fouling[step], slime_fouling[step] = model.getFR(True)
     # Initialize agent count grid
     agent_levels = np.zeros((model.length, model.width))
     # Populate the grid with agent counts
     for cell_content, (x, y) in model.grid.coord_iter():
-        agent_levels[y][x] = cell_content[0].fouling_level
+            agent_levels[y][x] = cell_content[0].fouling_level
     # Clear previous plot
     plt.clf()    
     # Draw updated heatmap
-    sns.heatmap(agent_levels, cmap="Greens", annot=False, cbar=True,square=True, vmin=0,vmax=10)
+    sns.heatmap(agent_levels, cmap="Greens", annot=False, cbar=True,square=False, vmin=0,vmax=8)
+    #plt.set_axis_off()
+    plt.xlabel('y')
+    plt.ylabel('x')
+    plt.suptitle('Visual Representation of Biofouling Over Time (Plan View)') 
     plt.title(f"Step {step + 1}")
 
     # Pause to update plot
     plt.pause(0.1)  # Adjust for desired speed
 
-# plot velocities over the hull for each agent
-'''velocities = np.zeros((model.length, model.width))
-for cell_content, (x, y) in model.grid.coord_iter():
-    velocities[y][x] = cell_content[0].velocity
-'''
-
-#plt.figure()
-#sns.heatmap(velocities, cmap="coolwarm", annot=False, cbar=True, square=True)
-#plt.show()
-
-
 # plot total biofouling growth over time
-#plot_FR()
-
-
+#plot_fouling_classes(large_fouling, medium_fouling, slime_fouling)
 # plot sigmoid distribution for biofouling growth probability
 #plot_prob_dist()
 
-
-# visualise hull with Plotly library
-# comment this stuff out below
-x_dat, y_dat, z_dat = plotly_plot()
-print(x_dat)
-hull_dat = np.zeros((len(x_dat), len(y_dat), len(z_dat)))
-hull_dat[:,0], hull_dat[:,1], hull_dat[:,2] = x_dat, y_dat, z_dat
-
-print(hull_dat)
-
-# visualise KCS mesh
-#KCS_surface()
-#plt.show()
-
+# show hull
+#plotly_plot()
+'''
